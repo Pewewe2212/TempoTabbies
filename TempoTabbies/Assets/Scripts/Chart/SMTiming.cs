@@ -8,34 +8,33 @@ public static class SMTiming
         public int lane;
         public float time;
         public char type;
+
+        public bool isHoldStart;
+        public bool isHoldEnd;
+        public float holdEndTime; // only valid for hold starts
     }
+
 
     public static List<ParsedNote> GetNoteTimes(SMFile sm, SMChart chart)
     {
         List<ParsedNote> notes = new();
-
         if (chart?.Measures == null || chart.Measures.Count == 0)
         {
             Debug.LogWarning("Chart has no measures!");
             return notes;
         }
 
-        // ----- BPM setup -----
         float offset = sm != null ? sm.Offset : 0f;
         float bpm = 120f;
         if (sm?.Bpms != null && sm.Bpms.Count > 0)
-        {
-            foreach (var kv in sm.Bpms)
-            {
-                bpm = kv.Value;
-                break;
-            }
-        }
+            foreach (var kv in sm.Bpms) { bpm = kv.Value; break; }
 
         float secPerBeat = 60f / bpm;
         float currentBeat = 0f;
 
-        // ----- measure loop -----
+        // track active holds
+        Dictionary<int, ParsedNote> activeHolds = new();
+
         foreach (var measure in chart.Measures)
         {
             int rows = measure.Count;
@@ -52,19 +51,45 @@ public static class SMTiming
                     char c = row[lane];
                     if (c == '0') continue;
 
-                    ParsedNote n = new ParsedNote
+                    if (c == '1') // tap
                     {
-                        lane = lane,
-                        time = time,
-                        type = c
-                    };
-                    notes.Add(n);
+                        notes.Add(new ParsedNote { lane = lane, time = time, type = '1' });
+                    }
+                    else if (c == '2') // hold start
+                    {
+                        var n = new ParsedNote { lane = lane, time = time, type = '2', isHoldStart = true };
+                        activeHolds[lane] = n;
+                    }
+                    else if (c == '3') // hold end
+                    {
+                        if (activeHolds.TryGetValue(lane, out ParsedNote start))
+                        {
+                            start.holdEndTime = time;
+                            notes.Add(start); // add the hold start
+                            activeHolds.Remove(lane);
+                        }
+                        notes.Add(new ParsedNote { lane = lane, time = time, type = '3', isHoldEnd = true });
+                    }
                 }
             }
             currentBeat += 4f;
         }
 
-        Debug.Log($"Generated {notes.Count} notes from chart");
+        Debug.Log($"Generated {notes.Count} notes (with holds)");
         return notes;
     }
+    public static ParsedNote? FindHoldEnd(List<ParsedNote> notes, int startIndex)
+    {
+        var start = notes[startIndex];
+        if (start.type != '2') return null; // not a hold start
+
+        for (int i = startIndex + 1; i < notes.Count; i++)
+        {
+            var n = notes[i];
+            if (n.lane == start.lane && n.type == '3')
+                return n;
+        }
+        return null;
+    }
+
 }
